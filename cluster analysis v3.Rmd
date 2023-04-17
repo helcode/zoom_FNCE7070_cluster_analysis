@@ -1,0 +1,374 @@
+---
+title: "Zoom Cluster Analysis"
+author: "Team-7, (Abhishek Gupta, Alireza Salmanzadeh, Daria Asai, Hani Elmalky)"
+date: "2023-04-11"
+output:
+  html_document:
+    highlight: haddock
+    theme: lumen
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Code to set the random number seed.
+set.seed(20230422)
+
+# install packages
+#install.packages("factoextra")
+#install.packages("ggforce")
+
+# Load the necessary libraries
+library(cluster)
+library(factoextra)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(ggpubr)
+library(gridExtra)
+library(ggforce)
+library(concaveman)
+
+```
+
+This document will try to approach Zoom's historical analysis from a quantitative perspective, it is meant to be a complementary document to the case write app & excel worksheet submitted by Team-7.
+
+# Data Wrangling
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Load data
+data.dir <- "/Users/helmalky/Library/CloudStorage/OneDrive-Personal/WEMBA47/Term-6/FNCE 7070 Valuation/Assignements/ZM Valuation/"
+fname <- "Zoom Valuation, Ratios_tall-v3.csv"
+fullpath <- paste(data.dir, fname, sep ="")
+df_tall <-  read.csv(file = fullpath)
+```
+```{r}
+# transform data into the correct format
+df_tall[, c("Parameter", "Ticker", "Year")] <- lapply(df_tall[, c("Parameter", "Ticker", "Year")], as.factor)
+
+# show the final data format
+str(df_tall)
+```
+
+
+Wrangle data in preparation for the clustering analysis
+```{r}
+# spread data around year
+df <- spread(df_tall, key = Year, value = Value)
+
+
+# split the df into a df_list around parameters while dropping the parameter column
+dfl <- split(df, f = df$Parameter)
+dfl <- lapply(dfl, function(x) subset(x, select = -Parameter))
+
+summary(dfl)
+```
+
+```{r}
+str(dfl$` AP/Revenues `)
+```
+```{r}
+# use ticker name as row column for each df in dfl & drop ticker column
+for (item in 1:length(dfl)) {
+  rownames(dfl[[item]]) <- dfl[[item]]$Ticker
+  dfl[[item]]$Ticker <- NULL
+}
+
+head(dfl$` EBIT Margin `, 7)
+```
+
+```{r fig.height=12, fig.width=8}
+#build the a clusterization function
+build_cluster_map <- function(dataframe, number_of_clusters) {
+  optimum_cluster <- kmeans(dataframe, 
+                            centers = number_of_clusters, 
+                            nstart = 25)
+  cluster_df <- as.data.frame(optimum_cluster$cluster)
+  colnames(cluster_df)[1] <- "Cluster"
+  
+  return (
+    list(
+      cluster_table = cluster_df, 
+      visualization = fviz_cluster(optimum_cluster, data = dataframe)
+    )
+  )
+}
+
+
+analyize_cluster <- function(dataframe, number_of_clusters = 3){
+  k_max <- 10
+  
+  # Average Silhouette Width Analysis
+  p1 <- fviz_nbclust(dataframe, kmeans, k.max = k_max, method = "silhouette") + 
+    theme_minimal() + theme(axis.title.y = element_blank()) +
+    ggtitle("Average Silhouette Width") + 
+    geom_vline(xintercept = number_of_clusters, linetype = 2, col = "red")
+
+  # Total Within Sum of Squares Analysis
+  p2 <- fviz_nbclust(dataframe, kmeans, k.max = k_max, method = "wss") + 
+    theme_minimal() + theme(axis.title.y = element_blank()) +
+    ggtitle("Total Within Sum of Squares") + 
+    geom_vline(xintercept = number_of_clusters, linetype = 2, col = "red")
+  
+  # Gap Statistics (k) Analysis
+  gap_stat <- clusGap(dataframe, FUN = kmeans, nstart = 25, K.max = k_max, B = 50)
+  p3 <- fviz_gap_stat(gap_stat) + 
+    theme_minimal() + theme(axis.title.y = element_blank()) +
+    ggtitle("Gap Statistics (k)") + 
+    geom_vline(xintercept = number_of_clusters, linetype = 2, col = "red")
+
+  
+  # Cluster Analysis
+  cluster_map <- build_cluster_map(dataframe, number_of_clusters)
+  
+  p4 <-  cluster_map$visualization + 
+    theme_minimal() + 
+    ggtitle(paste("Cluster Plot for",number_of_clusters,"Clusters"))
+  
+  p5 <- ggplot() + 
+    theme_minimal() + 
+    annotation_custom(tableGrob(cluster_map$cluster_table))
+
+  
+  ggarrange(
+    ggarrange(p1, p2, p3, widths = c(1,1), ncol = 3), 
+    ggarrange(p4, p5, widths = c(2,1), ncol = 2), 
+    nrow = 2, labels = c("A","B"), heights = c(2,3)
+    )
+  
+}
+
+```
+
+
+# Analyizing Financial Ratios
+
+## Analyizing **All** Ratios' Principle Components
+
+In this section we will utilize principle components to reduce the 12 financial ratios into two dimensions, we understand that this may cause loss of information due the reduction method, but our hypothesis is that performing clustering analysis on the principle components may reveal association between Zoom & other companies that we can't see by analyzing individual financial ratio.
+
+```{r}
+# spread data around Parameter
+dfw <- pivot_wider(df_tall, names_from = Parameter, values_from = Value)
+
+
+dfw$Year <- factor(dfw$Year, levels = c(2018, 2019, 2020, 2021, 2022))
+
+dfw <- as.data.frame(dfw)
+
+# split the df into a df_list around Year while dropping the Year column
+dfwl <- split(dfw, f = dfw$Year)
+dfwl <- lapply(dfwl, function(x) subset(x, select = -Year))
+
+summary(dfwl)
+```
+
+```{r}
+head(dfwl$'2018', 7)
+```
+
+```{r}
+# build row name & scale all values
+for (item in 1:length(dfwl)) {
+  rownames(dfwl[[item]]) <- dfwl[[item]]$Ticker
+  # use ticker name as row column for each df in dfl & drop ticker column
+  dfwl[[item]]$Ticker <- NULL
+  for (column in 1:length(dfwl[[item]])) {
+    dfwl[[item]][[column]] <- scale(dfwl[[item]][[column]])
+  }
+}
+
+head(dfwl$'2018', 7)
+```
+
+### 2018 Cluster Analysis
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfwl$'2018'
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 5)
+```
+
+### 2019 Cluster Analysis
+
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfwl$'2019'
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 5)
+```
+The two graphs above highlights that ZM has shared a cluster with SPLK & RNG during 2018, but it is having its own cluster in 2019. It is expected for Zoom to drift in its similarities post IPO, hence, we will run the lumsum analysis again with more recent year.
+
+### 2022 Cluster Analysis
+
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfwl$'2022'
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 5)
+```
+We have noticed that ZM is again is having its own cluster during 2022, which suggests that ZM have some uniquiness in its financial ratios compared to other companies in the sample, we will try to uncover that relationship in the next section by limiting the parameters of the principle components analysis.
+
+## Analyizing **key** Ratios' Principle Components
+
+In this section we will rerun the principle components analysis on ROIC, EBIT Margin, and Capital Turnover parameters only. 
+
+```{r}
+# build a limited data frame
+
+dfwll <- dfwl
+
+
+# build row name & scale all values
+for (item in 1:length(dfwll)) {
+  
+  dfwll[[item]] <- select(dfwll[[item]], 
+                          -c(' COGS/Revenue ',
+                             ' SG&A/Revenue ', 
+                             ' NPP&E/Revenues ', 
+                             ' Cash/Revenue ', 
+                             ' AR/Revenues ', 
+                             ' Inventories/Revenue ', 
+                             ' Prepaid Expenses/Revenues ', 
+                             ' WCR/Revenues ', 
+                             ' AP/Revenues '
+                             )
+                          )
+}
+
+
+head(dfwll$'2019', 7)
+```
+
+### 2018 Cluster Analysis
+
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfwll$'2018'
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 5)
+```
+
+### 2019 Cluster Analysis
+
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfwll$'2019'
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 6)
+```
+
+### 2020 Cluster Analysis
+
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfwll$'2020'
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 5)
+```
+
+### 2021 Cluster Analysis
+
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfwll$'2021'
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 6)
+```
+
+### 2022 Cluster Analysis
+
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfwll$'2022'
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 6)
+```
+The analysis above suggests that principle components cauterization over ROIC, EBIT Margin, and Capital Turnover suggests that ZM are having it's own cluster in 2019, while it shared the cluster with `VG, TEAM, RNG, RBBN,FIVN` in 2018, yet that cluster has changed over the following years 2020-2022. Hence, we will be extracting the cluster data to Excel to run another cluster analysis on the combined grouping to identify the best compaines to to be considered as ZM comps.
+
+
+## Analyizing Indvidual Ratio
+### Account Payable to Revenue
+
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfl$` AP/Revenues `
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 5)
+```
+
+
+### Account Receivable to Revenue
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfl$` AR/Revenues `
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 5)
+```
+
+
+### Capital Turnover
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfl$' Capital Turnover '
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 6)
+```
+
+### Cash to Revenue
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfl$' Cash/Revenue '
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 6)
+```
+
+### EBITDA Margin
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfl$' EBIT Margin '
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 5)
+```
+
+
+### NPPE to Revenue
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfl$' NPP&E/Revenues '
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 6)
+```
+
+
+
+### ROIC
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfl$' ROIC '
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 5)
+```
+
+
+### SG&A to Revenue
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfl$' SG&A/Revenue '
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze,4 )
+```
+
+
+### WCR to Revenue
+```{r fig.height=8, fig.width=12, message=FALSE, warning=FALSE}
+df_to_analyze <- dfl$' WCR/Revenues '
+
+# identify the optimum cluster size
+analyize_cluster(df_to_analyze, 5)
+```
